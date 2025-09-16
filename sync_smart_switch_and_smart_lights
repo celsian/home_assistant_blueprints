@@ -1,0 +1,74 @@
+blueprint:
+  name: Sync two lights (state + brightness, loop-safe)
+  description: >
+    Keeps on/off and brightness mirrored between two lights (e.g., a smart
+    switch and smart bulb). Ignores color. Loop-safe.
+  domain: automation
+  input:
+    light_a:
+      name: Light A
+      description: First light or dimmer
+      selector:
+        entity:
+          domain: light
+    light_b:
+      name: Light B
+      description: Second light or dimmer
+      selector:
+        entity:
+          domain: light
+
+mode: parallel
+max_exceeded: silent
+
+variables:
+  light_a: !input light_a
+  light_b: !input light_b
+
+triggers:
+  - platform: state
+    entity_id: !input light_a
+  - platform: state
+    entity_id: !input light_b
+
+conditions:
+  - condition: template
+    value_template: "{{ trigger.to_state.context.parent_id is none }}"
+
+variables:
+  source: "{{ trigger.entity_id }}"
+  target: "{{ light_b if trigger.entity_id == light_a else light_a }}"
+  src_state: "{{ trigger.to_state.state }}"
+  src_brightness: >-
+    {{ (trigger.to_state.attributes.brightness
+        if 'brightness' in trigger.to_state.attributes
+        else state_attr(source, 'brightness')) | int(0) }}
+  tgt_state: "{{ states(target) }}"
+  tgt_brightness: "{{ state_attr(target, 'brightness') | int(0) }}"
+  brightness_delta: "{{ (src_brightness - tgt_brightness) | abs }}"
+
+actions:
+  - choose:
+      - conditions: "{{ src_state == 'off' and tgt_state != 'off' }}"
+        sequence:
+          - service: light.turn_off
+            target:
+              entity_id: "{{ target }}"
+      - conditions:
+          - condition: template
+            value_template: "{{ src_state == 'on' }}"
+        sequence:
+          - service: light.turn_on
+            target:
+              entity_id: "{{ target }}"
+            data:
+              brightness: "{{ src_brightness if src_brightness > 0 else 255 }}"
+  - if:
+      - condition: template
+        value_template: "{{ src_state == 'on' and brightness_delta > 3 }}"
+    then:
+      - service: light.turn_on
+        target:
+          entity_id: "{{ target }}"
+        data:
+          brightness: "{{ src_brightness }}"
